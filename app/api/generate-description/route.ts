@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
@@ -12,18 +12,17 @@ export async function POST(req: Request) {
     }
 
     const formData = await req.formData();
-    const image = formData.get("image") as File;
+    const image = formData.get("image") as File | null;
+    const tone = (formData.get("tone") as string) || "Professional";
+    const platform = (formData.get("platform") as string) || "Amazon";
 
     if (!image) {
-      return NextResponse.json(
-        { error: "No image provided" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "No image uploaded" }, { status: 400 });
     }
 
-    const buffer = Buffer.from(await image.arrayBuffer());
-    const base64 = buffer.toString("base64");
-    const imageUrl = `data:${image.type};base64,${base64}`;
+    const bytes = await image.arrayBuffer();
+    const base64 = Buffer.from(bytes).toString("base64");
+    const dataUrl = `data:${image.type};base64,${base64}`;
 
     const OpenAI = (await import("openai")).default;
 
@@ -31,45 +30,49 @@ export async function POST(req: Request) {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    const prompt = `
-Generate exactly 3 professional ecommerce product descriptions 
-(25–30 words each) for this apparel image.
-
-Each description must:
-- Be on a new line
-- Be clear, polished and sales-focused
-- Suitable for ecommerce platforms
-Return only the descriptions.
-`;
-
     const response = await client.responses.create({
       model: "gpt-4.1-mini",
       input: [
         {
           role: "user",
           content: [
-            { type: "input_text", text: prompt },
+            {
+              type: "input_text",
+              text: `You are an expert ecommerce apparel copywriter.
+
+Generate exactly 3 bullet point product descriptions.
+
+Tone: ${tone}
+Platform: ${platform}
+
+Each description must:
+- Start with "- "
+- Be 25-35 words
+- Be complete
+- Be suitable for ecommerce
+- Not be cut off`,
+            },
             {
               type: "input_image",
-              image_url: imageUrl,
-              detail: "low"
-            }
-          ]
-        }
-      ]
+              image_url: dataUrl,
+              detail: "low",
+            },
+          ],
+        },
+      ],
     });
 
-    const text =
+    const outputText =
       response.output_text ??
       "";
 
-    const descriptions = text
+    const descriptions = outputText
       .split("\n")
-      .filter(Boolean);
+      .filter((line) => line.trim().startsWith("-"))
+      .slice(0, 3);
 
     return NextResponse.json({ descriptions });
-
-  } catch (error: any) {
+  } catch (error) {
     console.error("DESCRIPTION ERROR:", error);
     return NextResponse.json(
       { error: "Description generation failed" },
